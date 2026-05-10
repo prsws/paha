@@ -575,17 +575,19 @@ class VectorDBManager:
         area_registry = ar.async_get(self.hass)
         device_registry = dr.async_get(self.hass)
         try:
-
-            if (entity_entry := entity_registry.async_get(entity_id)) and entity_entry.device_id:
-                if (device_entry := device_registry.async_get(entity_entry.device_id)) and device_entry.area_id:
-                    if area := area_registry.async_get_area(device_entry.area_id):
+            if entity_entry := entity_registry.async_get(entity_id):
+                area_id = entity_entry.area_id
+                if not area_id and entity_entry.device_id:
+                    device_entry = device_registry.async_get(entity_entry.device_id)
+                    if device_entry:
+                        area_id = device_entry.area_id
+                if area_id:
+                    if area := area_registry.async_get_area(area_id):
                         parts.append(f"Location: {area.name}")
                 if entity_entry.aliases:
                     clean_aliases = [a for a in entity_entry.aliases if isinstance(a, str)]
-                    
                     if clean_aliases:
                         parts.append(f"Aliases: {', '.join(clean_aliases)}")
-
         except Exception:
             _LOGGER.debug("Could not determine area for entity: %s", entity_id)
 
