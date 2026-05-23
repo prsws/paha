@@ -1,7 +1,7 @@
 """Conversation history management for Home Agent.
 
-This module provides conversation history storage and retrieval for maintaining
-context across multiple turns in a conversation.
+PAHA Response Shaping: Map to four outputs - validated HA action, clarification,
+escalation, or no-op. Suppress long-form prose responses. Enforce single-shot bias.
 """
 
 from __future__ import annotations
@@ -21,17 +21,12 @@ from .const import EVENT_HISTORY_SAVED, HISTORY_STORAGE_KEY
 
 _LOGGER = logging.getLogger(__name__)
 
-# Token estimation: rough estimate of ~4 characters per token
-# This is a conservative estimate that works across most models
 CHARS_PER_TOKEN = 4
 
-# Storage version for migrations
 STORAGE_VERSION_HISTORY = 1
 
-# Default debounce delay for saving (seconds)
 DEFAULT_SAVE_DELAY = 5
 
-# Maximum storage size in bytes (10 MB)
 MAX_STORAGE_SIZE = 10 * 1024 * 1024
 
 
@@ -58,8 +53,9 @@ class ConversationHistoryManager:
         persist: bool = False,
         storage_key: str = HISTORY_STORAGE_KEY,
         save_delay: int = DEFAULT_SAVE_DELAY,
+        device_id: str | None = None,
     ) -> None:
-        """Initialize the conversation history manager.
+        """PAHA response shaping: device_id → response brevity modality.
 
         Args:
             max_messages: Maximum number of messages to retain per conversation
@@ -68,6 +64,7 @@ class ConversationHistoryManager:
             persist: Enable persistent storage across restarts
             storage_key: Storage key for persistence (default: from const.py)
             save_delay: Debounce delay in seconds before saving (default: 5)
+            device_id: PAHA channel discriminator (voice satellite vs chat)
         """
         self._histories: dict[str, list[dict[str, Any]]] = defaultdict(list)
         self._max_messages = max_messages
@@ -102,13 +99,17 @@ class ConversationHistoryManager:
                     self._storage_key,
                 )
 
+        self._device_id = device_id
+        self._voice_mode = device_id is not None
+
         _LOGGER.debug(
             "Initialized ConversationHistoryManager with max_messages=%d, max_tokens=%s, "
-            "persist=%s, save_delay=%ds",
+            "persist=%s, save_delay=%ds, device_id=%s",
             max_messages,
             max_tokens,
             persist,
             save_delay,
+            device_id,
         )
 
     async def load_from_storage(self) -> None:
@@ -121,7 +122,7 @@ class ConversationHistoryManager:
         Raises:
             RuntimeError: If persistence is not enabled or Store is not initialized
         """
-        if not self._persist or not self._store:
+        if not self._Persist or not self._store:
             _LOGGER.debug("Persistence not enabled, skipping load from storage")
             return
 
@@ -731,7 +732,7 @@ class ConversationHistoryManager:
             _LOGGER.info("Cleaned up %d old conversations", len(to_delete))
 
     def shutdown_scheduled_cleanup(self) -> None:
-        """Stop cleanup scheduler.
+        """PAHA: Enforce four outputs - service_call, clarification, escalation, or no-op.
 
         Cancels the periodic cleanup task. Should be called during component shutdown
         to prevent cleanup from running after the component is unloaded.
@@ -740,3 +741,11 @@ class ConversationHistoryManager:
             self._cleanup_listener()
             self._cleanup_listener = None
             _LOGGER.info("Stopped scheduled conversation cleanup")
+
+    def get_response_shaping(self) -> str:
+        """Return voice/chat mode based on device_id (PAHA channel discrimination).
+
+        Returns:
+            "voice" if device_id non-null (voice satellite), "chat" if null (UI)
+        """
+        return "voice" if self._device_id else "chat"

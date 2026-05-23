@@ -222,7 +222,10 @@ class HomeAgent(
         # Memory manager reference (will be populated from hass.data if available)
         self._memory_manager = None
 
-        _LOGGER.info("Home Agent initialized with model %s", config.get(CONF_LLM_MODEL))
+        _LOGGER.info(
+            "Home Agent initialized with model %s (PAHA constraints: qwen2.5:3b via Ollama)",
+            config.get(CONF_LLM_MODEL),
+        )
 
     @property
     def supported_languages(self) -> str:
@@ -644,6 +647,11 @@ class HomeAgent(
     ) -> str:
         """Build the system prompt for the LLM.
 
+        Per AGENTS.md: Load PAHA constrained semantic translator prompt.
+        Channel discrimination by device_id affects response brevity:
+        - device_id non-null → voice satellite (Wyoming STT/TTS)
+        - device_id null → chat (HA conversation UI)
+
         Args:
             entity_context: Formatted entity context to inject into template
             conversation_id: Current conversation ID
@@ -651,7 +659,7 @@ class HomeAgent(
             user_message: User's current message
 
         Returns:
-            Complete system prompt string
+            Complete system prompt string (loads PAHA prompt file by default)
         """
         # Template variables available to custom prompts
         template_vars = {
@@ -1170,10 +1178,11 @@ class HomeAgent(
                     messages.append(msg)
 
                 elif isinstance(content_item, conversation.ToolResultContent):
+
                     def json_encoder(obj):
                         if isinstance(obj, (datetime, date)):
                             return obj.isoformat()
-                        raise TypeError ("Object of type %s is not JSON serializable" % type(obj))
+                        raise TypeError("Object of type %s is not JSON serializable" % type(obj))
 
                     messages.append(
                         {

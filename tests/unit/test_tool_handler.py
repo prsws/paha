@@ -75,6 +75,7 @@ def default_config():
         CONF_TOOLS_MAX_CALLS_PER_TURN: 5,
         CONF_TOOLS_TIMEOUT: 30,
         CONF_EMIT_EVENTS: True,
+        "guardrails_enabled": False,
     }
 
 

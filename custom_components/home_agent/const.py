@@ -730,8 +730,12 @@ DOMAIN_SERVICE_MAPPINGS: Final = {
     },
 }
 
-# Default system prompt
-DEFAULT_SYSTEM_PROMPT: Final = """You are a brief, friendly voice assistant for Home Assistant.
+# PAHA System Prompt Reference
+DEFAULT_SYSTEM_PROMPT_FILE: Final = "agent_prompts/paha_constrained_translator"
+DEFAULT_SYSTEM_PROMPT: Final = ""  # Loaded at runtime for PAHA constraints
+
+# Fallback system prompt (not used by PAHA)
+_FALLBACK_SYSTEM_PROMPT: Final = """You are a brief, friendly voice assistant for Home Assistant.
 Answer questions about device states directly from the CSV, and use tools ONLY when needed.
 
 ## Available Tools

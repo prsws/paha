@@ -1,4 +1,8 @@
-"""Conversation session manager for persistent voice conversations."""
+"""Conversation session manager for persistent voice conversations.
+
+PAHA Channel Discrimination: device_id non-null → voice satellite (STT/TTS),
+device_id null → chat (HA UI). Influences response brevity and output modality.
+"""
 
 from __future__ import annotations
 
@@ -26,10 +30,10 @@ class ConversationSessionManager:
     across multiple interactions from the same user or device.
 
     The manager automatically handles:
-    - Session expiration based on configurable timeout
-    - Persistent storage across Home Assistant restarts
-    - Automatic cleanup of expired sessions
-    - Priority handling (device_id over user_id for better multi-device support)
+      - Session expiration based on configurable timeout
+      - Persistent storage across Home Assistant restarts
+      - Automatic cleanup of expired sessions
+      - Priority handling (device_id over user_id for better multi-device support)
     """
 
     def __init__(
@@ -137,9 +141,9 @@ class ConversationSessionManager:
 
         Example:
             >>> await manager.set_conversation_id(
-            ...     "01HWXYZ123...",
-            ...     user_id="user_123",
-            ...     device_id="kitchen_satellite"
+            ...       "01HWXYZ123...",
+            ...       user_id="user_123",
+            ...       device_id="kitchen_satellite"
             ... )
         """
         key = device_id if device_id else user_id
@@ -247,9 +251,9 @@ class ConversationSessionManager:
 
         Returns:
             Dictionary with session statistics including:
-            - total_sessions: Number of active sessions
-            - timeout_seconds: Configured timeout value
-            - sessions: List of session details with age information
+              - total_sessions: Number of active sessions
+              - timeout_seconds: Configured timeout value
+              - sessions: List of session details with age information
         """
         self._cleanup_expired_sessions()
 

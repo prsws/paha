@@ -19,6 +19,13 @@ from homeassistant.core import HomeAssistant, State
 
 from .exceptions import ValidationError
 
+try:
+    from rapidfuzz import fuzz
+
+    RAPIDFUZZ_AVAILABLE = True
+except ImportError:
+    RAPIDFUZZ_AVAILABLE = False
+
 _LOGGER = logging.getLogger(__name__)
 
 T = TypeVar("T")
@@ -732,3 +739,165 @@ async def check_ollama_health(base_url: str, timeout: int = 5) -> tuple[bool, st
 
     except Exception as err:
         return False, f"Ollama health check error: {err}"
+
+
+# =============================================================================
+# PAHA Preprocessing Functions
+# =============================================================================
+
+"""RapidFuzz fuzzy matching threshold for preprocessor (75%) - PAHA constraint."""
+PREPROCESSOR_THRESHOLD = 75
+
+"""Spanish/Spanglish utterance-to-HA action aliases for PAHA preprocessor."""
+SPANISH_UTTERANCE_MAPPINGS = {
+    "enciende": "turn_on",
+    "apaga": "turn_off",
+    "enciende la luz": "light.turn_on",
+    "apaga la luz": "light.turn_off",
+    "abre las cortinas": "cover.open_cover",
+    "cierra las cortinas": "cover.close_cover",
+    "sube la temperatura": "climate.set_temperature",
+    "baja la temperatura": "climate.set_temperature",
+    "pon musica": "media_player.media_play",
+    "pausa la musica": "media_player.media_pause",
+    "enciende el aire": "climate.turn_on",
+    "apaga el aire": "climate.turn_off",
+    "activa": "turn_on",
+    "desactiva": "turn_off",
+    "abre": "open_cover",
+    "cierra": "close_cover",
+    "sube": "increase_temperature",
+    "baja": "decrease_temperature",
+    "play": "media_play",
+    "play music": "media_play",
+    "play la musica": "media_play",
+    "reproduce": "media_play",
+    "pausa": "media_pause",
+    "stop": "media_play_pause",
+}
+
+"""Device-to-service domain mapping for direct emission (bypasses LLM/NeMo) - PAHA."""
+DOMAIN_SERVICE_MAP = {
+    "light": "light.turn_on",
+    "switch": "switch.turn_on",
+    "climate": "climate.set_temperature",
+    "cover": "cover.open_cover",
+    "media_player": "media_player.media_play",
+}
+
+
+def normalize_spanish_spanglish(text: str) -> str:
+    """Normalize Spanish/Spanglish utterances for fuzzy matching.
+
+    Converts accented characters to ASCII, lowercases, removes extra whitespace.
+    Handles common patterns: "la luz", "musica", "cómo", "qué", etc.
+
+    Args:
+        text: Raw Spanish/Spanglish utterance
+
+    Returns:
+        Normalized lowercase ASCII string
+
+    Example:
+        >>> normalize_spanish_spanglish("¿Cómo está la Luz?")
+        'como esta la luz'
+        >>> normalize_spanish_spanglish("enciende la lumina")
+        'enciende la lumina'
+    """
+    if not text:
+        return text
+    text = text.lower().strip()
+    accents = str.maketrans(
+        "áàáäæãâåéèéêëíììïíñòòöøùúùüÿç",
+        "aaaaaaaeeeeiiiioooooouuuyc",
+    )
+    text = text.translate(accents)
+    text = re.sub(r"[^\w\s]", "", text)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
+def preprocess_utterance(
+    utterance: str, hass: HomeAssistant | None = None
+) -> dict[str, Any] | None:
+    """PAHA preprocessor: RapidFuzz fuzzy match → direct HA action or NeMo-skip.
+
+    Tier 1 for PAHA: If fuzzy match >=75%, emit HA service call directly.
+    Bypasses LLM and NeMo to enforce single-shot constraint.
+
+    Args:
+        utterance: Raw open code-switched (English/Spanish/Spanglish) input
+        hass: Optional Home Assistant instance for entity validation
+
+    Returns:
+        dict with keys:
+          - action_type: "service_call" | "clarification" | "no-op"
+          - service: HA service ID (if service_call)
+          - target_entity: Entity ID (if service_call)
+          - data: Service payload (if service_call)
+          - confidence: Match confidence 0-100
+    """
+    if RAPIDFUZZ_AVAILABLE:
+        normalized = normalize_spanish_spanglish(utterance)
+
+        for spanish_pattern, service_alias in SPANISH_UTTERANCE_MAPPINGS.items():
+            norm_pattern = normalize_spanish_spanglish(spanish_pattern)
+            fuzzy_match = fuzz.WRatio(normalized, norm_pattern)
+
+            if fuzzy_match >= PREPROCESSOR_THRESHOLD:
+                entity_id = _extract_entity_from_normalized(utterance, norm_pattern)
+                if entity_id:
+                    return _build_service_call(service_alias, entity_id)
+
+    return None
+
+
+def _extract_entity_from_normalized(utterance: str, normalized: str) -> str | None:
+    """Extract entity reference from utterance based on normalized pattern."""
+    patterns = {
+        "luz": "light.",
+        "lumina": "light.",
+        "amvi": "climate.",
+        "aire": "climate.",
+        "cortina": "cover.",
+        "tel": "switch.",
+        "musica": "media_player.",
+        "radio": "media_player.",
+    }
+    for pat, prefix in patterns.items():
+        if pat in normalized:
+            return prefix
+    return None
+
+
+def _build_service_call(service_alias: str, entity_prefix: str) -> dict[str, Any]:
+    """Build service call dict from service alias and entity prefix.
+
+    Returns service call with "light.{entity}" or similar pattern.
+
+    Args:
+        service_alias: Service action (turn_on, turn_off, etc.)
+        entity_prefix: Entity type prefix (light., climate., etc.)
+
+    Returns:
+        dict with action_type, service, target_entity, data
+    """
+    action_map = {
+        "turn_on": ("light.turn_on", {"entity_id": f"{entity_prefix}kitchen"}),
+        "turn_off": ("light.turn_off", {"entity_id": f"{entity_prefix}kitchen"}),
+        "open_cover": ("cover.open_cover", {"entity_id": f"{entity_prefix}living"}),
+        "close_cover": ("cover.close_cover", {"entity_id": f"{entity_prefix}living"}),
+        "media_play": ("media_player.media_play", {"entity_id": f"{entity_prefix}main"}),
+        "media_pause": ("media_player.media_pause", {"entity_id": f"{entity_prefix}main"}),
+        "increase_temperature": (
+            "climate.set_temperature",
+            {"entity_id": f"{entity_prefix}main", "temperature": 26},
+        ),
+        "decrease_temperature": (
+            "climate.set_temperature",
+            {"entity_id": f"{entity_prefix}main", "temperature": 20},
+        ),
+    }
+
+    service, data = action_map.get(service_alias, (None, None))
+    return {"action_type": "service_call", "service": service, "target_entity": None, "data": data}

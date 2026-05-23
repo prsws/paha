@@ -25,6 +25,7 @@ from .const import (
 )
 from .exceptions import ToolExecutionError, ValidationError
 from .helpers import truncate_text
+from .tools.nemo_guardrails import GuardrailsValidator
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -36,6 +37,10 @@ class ToolHandler:
     including native tools (ha_control, ha_query), custom tools, and the
     optional external LLM tool.
 
+    Per AGENTS.md: NeMo Guardrails validation at tool execution boundary
+    enforces that tool calls map to validated HA actions, clarifications,
+    escalations, or no-ops. PAHA is a constrained semantic translator.
+
     Attributes:
         hass: Home Assistant instance
         config: Configuration dictionary
@@ -43,6 +48,7 @@ class ToolHandler:
         max_calls_per_turn: Maximum number of tool calls allowed per conversation turn
         timeout: Timeout in seconds for each tool execution
         emit_events: Whether to fire Home Assistant events for tool execution
+        _guardrails: NeMo Guardrails validator for PAHA constraints
     """
 
     def __init__(self, hass: HomeAssistant, config: dict[str, Any]) -> None:
@@ -67,6 +73,9 @@ class ToolHandler:
         )
         self.timeout = config.get(CONF_TOOLS_TIMEOUT, DEFAULT_TOOLS_TIMEOUT)
         self.emit_events = config.get(CONF_EMIT_EVENTS, True)
+        self._guardrails: GuardrailsValidator = GuardrailsValidator(
+            enabled=config.get("guardrails_enabled", True)
+        )
 
         # Track metrics for monitoring
         self._execution_count = 0
@@ -88,7 +97,7 @@ class ToolHandler:
 
         Args:
             tool: Tool instance to register. Must have 'name' attribute and
-                'execute' method.
+                  'execute' method.
 
         Raises:
             ValidationError: If tool is invalid or name is already registered
@@ -218,6 +227,8 @@ class ToolHandler:
         Executes the specified tool with the given parameters, handling
         timeouts, errors, and event emission. Tracks execution metrics.
 
+        Per AGENTS.md: Validate against NeMo guardrails before execution.
+
         Args:
             tool_name: Name of the tool to execute
             parameters: Parameters to pass to the tool
@@ -237,13 +248,13 @@ class ToolHandler:
         Example:
             >>> result = await handler.execute_tool(
             ...     "ha_query",
-            ...     {"entity_id": "sensor.temperature"},
+            ...     {"entity_id": "light.living_room"},
             ...     "conv_123"
             ... )
             >>> result
             {
                 "success": True,
-                "result": {"entity_id": "sensor.temperature", "state": "23.5"},
+                "result": {"entity_id": "light.living_room", "state": "23.5"},
                 "duration_ms": 45.2
             }
         """
@@ -251,6 +262,14 @@ class ToolHandler:
         success = False
         result = None
         error_message = None
+
+        # Validate against NeMo guardrails
+        is_valid, validation_error = self._guardrails.validate_tool_call(tool_name, parameters)
+        if not is_valid:
+            error_message = f"Guardrails validation failed: {validation_error}"
+            self._failure_count += 1
+            _LOGGER.warning("Tool call blocked by guardrails: %s", tool_name)
+            raise ToolExecutionError(error_message) from ValidationError(validation_error)
 
         # Fire "started" event
         if self.emit_events:
